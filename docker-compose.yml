@@ -1,0 +1,132 @@
+version: "3.9"
+
+services:
+
+  # ==========================================================
+  # POSTGRES DATABASE
+  # ==========================================================
+  db:
+    image: postgres:15
+    container_name: fubapay_db
+    restart: always
+    environment:
+      POSTGRES_DB: fubapay
+      POSTGRES_USER: fubapay
+      POSTGRES_PASSWORD: secure_password_here
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  # ==========================================================
+  # REDIS
+  # ==========================================================
+  redis:
+    image: redis:7
+    container_name: fubapay_redis
+    restart: always
+    ports:
+      - "6379:6379"
+
+  # ==========================================================
+  # DJANGO BACKEND
+  # ==========================================================
+  backend:
+    build: .
+    container_name: fubapay_backend
+    command: >
+      gunicorn core.asgi:application
+      -k uvicorn.workers.UvicornWorker
+      --bind 0.0.0.0:8000
+      --workers 4
+    volumes:
+      - .:/app
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+      - redis
+    environment:
+      DEBUG: "False"
+      DATABASE_URL: postgres://fubapay:secure_password_here@db:5432/fubapay
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+    restart: always
+
+  # ==========================================================
+  # CELERY WORKER
+  # ==========================================================
+  celery_worker:
+    build: .
+    container_name: fubapay_worker
+    command: celery -A core worker --loglevel=info
+    volumes:
+      - .:/app
+    depends_on:
+      - backend
+      - redis
+    environment:
+      DATABASE_URL: postgres://fubapay:secure_password_here@db:5432/fubapay
+      REDIS_URL: redis://redis:6379/0
+    restart: always
+
+  # ==========================================================
+  # CELERY BEAT (SCHEDULER)
+  # ==========================================================
+  celery_beat:
+    build: .
+    container_name: fubapay_beat
+    command: celery -A core beat --loglevel=info
+    volumes:
+      - .:/app
+    depends_on:
+      - redis
+    environment:
+      DATABASE_URL: postgres://fubapay:secure_password_here@db:5432/fubapay
+      REDIS_URL: redis://redis:6379/0
+    restart: always
+
+  # ==========================================================
+  # FLOWER MONITORING
+  # ==========================================================
+  flower:
+    image: mher/flower
+    container_name: fubapay_flower
+    command: celery --broker=redis://redis:6379/0 flower
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+
+  # ==========================================================
+  # IPFS NODE
+  # ==========================================================
+  ipfs:
+    image: ipfs/kubo:latest
+    container_name: fubapay_ipfs
+    ports:
+      - "4001:4001"
+      - "5001:5001"
+      - "8080:8080"
+    volumes:
+      - ipfs_data:/data/ipfs
+    restart: always
+
+  # ==========================================================
+  # NGINX (REVERSE PROXY)
+  # ==========================================================
+  nginx:
+    image: nginx:latest
+    container_name: fubapay_nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx:/etc/nginx/conf.d
+    depends_on:
+      - backend
+    restart: always
+
+volumes:
+  postgres_data:
+  ipfs_data:
